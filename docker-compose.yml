@@ -1,0 +1,81 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  db:
+    image: postgres:15-alpine
+    container_name: venice-bars-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: venice_bars
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis (for caching)
+  redis:
+    image: redis:7-alpine
+    container_name: venice-bars-redis
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+
+  # API Server
+  api:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: venice-bars-api
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/venice_bars
+      - REDIS_URL=redis://redis:6379/0
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+
+  # Data Collection Worker (runs scheduled updates)
+  worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: venice-bars-worker
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@db:5432/venice_bars
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    command: python scripts/run_scheduler.py
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
